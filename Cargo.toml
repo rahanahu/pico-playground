@@ -15,7 +15,6 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 
 # We're using a Pico by default on this template
 rp-pico = "0.9"
-const-assert = "1.0.1"
 embedded-alloc = "0.6.0"
 usb-device = "0.3.2"
 usbd-serial = "0.2.2"

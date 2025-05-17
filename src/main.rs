@@ -4,6 +4,8 @@
 #![no_std]
 #![no_main]
 
+mod led;
+mod usb;
 extern crate alloc;
 
 use alloc::boxed::Box;
@@ -14,9 +16,9 @@ use cortex_m::interrupt::Mutex;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_alloc::LlffHeap as Heap;
-use embedded_hal::digital::OutputPin;
 use fugit::MicrosDurationU32;
 use panic_probe as _;
+use rp_pico::hal::gpio::bank0::Gpio25;
 use rp_pico::hal::timer::Alarm;
 // usbシリアル通信サポート
 // USB Device support
@@ -31,15 +33,26 @@ use rp_pico as bsp;
 // use sparkfun_pro_micro_rp2040 as bsp;
 
 use bsp::hal::{
-    clocks::{init_clocks_and_plls, Clock},
+    clocks::init_clocks_and_plls,
+    gpio::{FunctionSio, Pin, PullDown, SioOutput},
+    multicore::{Multicore, Stack},
     pac,
     pac::interrupt,
     sio::Sio,
-    timer::Alarm0,
+    timer::{Alarm0, Alarm1, Alarm2},
     watchdog::Watchdog,
     Timer,
 };
 
+const TIMER_INTERVAL_10MS: MicrosDurationU32 = MicrosDurationU32::micros(10_000); // 100ms
+const TIMER_INTERVAL_100MS: MicrosDurationU32 = MicrosDurationU32::micros(100_000); // 100ms
+
+// 競合回避のためにアラーム0,1をcore0に 2,3をcore1に割り当てる
+static ALARM0: Mutex<RefCell<Option<Alarm0>>> = Mutex::new(RefCell::new(None));
+static ALARM1: Mutex<RefCell<Option<Alarm1>>> = Mutex::new(RefCell::new(None));
+static ALARM2: Mutex<RefCell<Option<Alarm2>>> = Mutex::new(RefCell::new(None));
+
+// usb constants
 const USB_VID: u16 = 0x16C0;
 const USB_PID: u16 = 0x27DD;
 const USB_SERIAL_NUMBER_EN: &str = "picopico";
@@ -52,14 +65,29 @@ static USB_DEV: Mutex<RefCell<Option<UsbDevice<'static, rp_pico::hal::usb::UsbBu
     Mutex::new(RefCell::new(None));
 static SERIAL: Mutex<RefCell<Option<SerialPort<'static, rp_pico::hal::usb::UsbBus>>>> =
     Mutex::new(RefCell::new(None));
-static ALARM0: Mutex<RefCell<Option<Alarm0>>> = Mutex::new(RefCell::new(None));
+
+// 割り込みで使うのでグローバルにピンを持つ
+static LED_PIN: Mutex<RefCell<Option<Pin<Gpio25, FunctionSio<SioOutput>, PullDown>>>> =
+    Mutex::new(RefCell::new(None));
+
+fn core1_task() -> () {
+    loop {
+        cortex_m::asm::wfi();
+        // cortex_m::interrupt::free(|cs| {
+        //     if let Some(serial) = SERIAL.borrow(cs).borrow_mut().as_mut() {
+        //         let _ = serial.write(b"test\n");
+        //     }
+        // });
+    }
+}
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
-
+static mut CORE1_STACK: Stack<4096> = Stack::new();
 #[entry]
 fn main() -> ! {
     info!("Program start");
+
     // set heap
     {
         use core::mem::MaybeUninit;
@@ -79,9 +107,8 @@ fn main() -> ! {
     info!("Heap address: {:#018X}", s.as_ptr() as usize);
 
     let mut pac = pac::Peripherals::take().unwrap();
-    let core = pac::CorePeripherals::take().unwrap();
     let mut watchdog = Watchdog::new(pac.WATCHDOG);
-    let sio = Sio::new(pac.SIO);
+    let mut sio = Sio::new(pac.SIO);
 
     // External high-speed crystal on the pico board is 12Mhz
     let external_xtal_freq_hz = 12_000_000u32;
@@ -96,22 +123,43 @@ fn main() -> ! {
     )
     .ok()
     .unwrap();
-    let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
+
+    // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // usbポーリングのタイマー割り込みセットアップ
     let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
-    let alarm0 = timer.alarm_0().unwrap();
-    // Alarm0をグローバルに保存
+    // Alarmをグローバルに保存
     cortex_m::interrupt::free(|cs| {
-        ALARM0.borrow(cs).replace(Some(alarm0));
+        ALARM0.borrow(cs).replace(Some(timer.alarm_0().unwrap()));
     });
-    // Alarm0割り込みを有効化し、最初の割り込みをセット（USB_POLLING_INTERVAL後）
+    cortex_m::interrupt::free(|cs| {
+        ALARM1.borrow(cs).replace(Some(timer.alarm_1().unwrap()));
+    });
+    cortex_m::interrupt::free(|cs| {
+        ALARM2.borrow(cs).replace(Some(timer.alarm_2().unwrap()));
+    });
+    // Alarm の割り込みを有効化し、最初の割り込みをセット（USB_POLLING_INTERVAL後）
     cortex_m::interrupt::free(|cs| {
         if let Some(alarm) = ALARM0.borrow(cs).borrow_mut().as_mut() {
             alarm.schedule(USB_POLLING_INTERVAL).unwrap();
             alarm.enable_interrupt();
         }
     });
+    cortex_m::interrupt::free(|cs| {
+        if let Some(alarm) = ALARM1.borrow(cs).borrow_mut().as_mut() {
+            alarm.schedule(TIMER_INTERVAL_10MS).unwrap();
+            alarm.enable_interrupt();
+        }
+    });
+    cortex_m::interrupt::free(|cs| {
+        if let Some(alarm) = ALARM2.borrow(cs).borrow_mut().as_mut() {
+            alarm.schedule(TIMER_INTERVAL_100MS).unwrap();
+            alarm.enable_interrupt();
+        }
+    });
+
     unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
+    unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_1) };
+    unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_2) };
 
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
@@ -154,20 +202,22 @@ fn main() -> ! {
     // If you have a Pico W and want to toggle a LED with a simple GPIO output pin, you can connect an external
     // LED to one of the GPIO pins, and reference that pin here. Don't forget adding an appropriate resistor
     // in series with the LED.
-    let mut led_pin = pins.led.into_push_pull_output();
+    let led_pin = pins.led.into_push_pull_output();
+    cortex_m::interrupt::free(|cs| {
+        LED_PIN.borrow(cs).replace(Some(led_pin));
+    });
+
+    // core1の起動
+    let mut multicore = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
+    unsafe {
+        #[allow(static_mut_refs)]
+        multicore.cores()[1]
+            .spawn(&mut CORE1_STACK.mem, core1_task)
+            .unwrap();
+    }
 
     loop {
-        info!("on!");
-        led_pin.set_high().unwrap();
-        delay.delay_ms(500);
-        info!("off!");
-        led_pin.set_low().unwrap();
-        delay.delay_ms(500);
-        cortex_m::interrupt::free(|cs| {
-            if let Some(serial) = SERIAL.borrow(cs).borrow_mut().as_mut() {
-                let _ = serial.write(b"test\n");
-            }
-        });
+        cortex_m::asm::wfi(); // Wait for interrupt
     }
 }
 
@@ -181,13 +231,29 @@ fn TIMER_IRQ_0() {
             alarm.schedule(USB_POLLING_INTERVAL).ok();
         }
         // USBポーリング
-        if let (Some(usb_dev), Some(serial)) = (
-            USB_DEV.borrow(cs).borrow_mut().as_mut(),
-            SERIAL.borrow(cs).borrow_mut().as_mut(),
-        ) {
-            let _ = usb_dev.poll(&mut [serial]);
-        }
+        usb::poll_usb();
     });
 }
 
+#[interrupt]
+fn TIMER_IRQ_1() {
+    cortex_m::interrupt::free(|cs| {
+        // Alarm0の割り込みフラグをクリアし、次の割り込みをスケジュール
+        if let Some(alarm) = ALARM1.borrow(cs).borrow_mut().as_mut() {
+            alarm.clear_interrupt();
+            alarm.schedule(TIMER_INTERVAL_10MS).ok();
+        }
+    });
+}
+#[interrupt]
+fn TIMER_IRQ_2() {
+    cortex_m::interrupt::free(|cs| {
+        // Alarm0の割り込みフラグをクリアし、次の割り込みをスケジュール
+        if let Some(alarm) = ALARM2.borrow(cs).borrow_mut().as_mut() {
+            alarm.clear_interrupt();
+            alarm.schedule(TIMER_INTERVAL_100MS).ok();
+        }
+        led::led_toggle();
+    });
+}
 // End of file
