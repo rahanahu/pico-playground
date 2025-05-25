@@ -6,7 +6,7 @@ use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 pub fn led_on() {
     interrupt::free(|cs| {
         if let Some(pin) = LED_PIN.borrow(cs).borrow_mut().as_mut() {
-            let _ = pin.set_high().unwrap();
+            pin.set_high().unwrap();
         }
     });
 }
@@ -14,7 +14,7 @@ pub fn led_on() {
 pub fn led_off() {
     interrupt::free(|cs| {
         if let Some(pin) = LED_PIN.borrow(cs).borrow_mut().as_mut() {
-            let _ = pin.set_low().unwrap();
+            pin.set_low().unwrap();
         }
     });
 }
@@ -22,7 +22,7 @@ pub fn led_off() {
 pub fn led_toggle() {
     interrupt::free(|cs| {
         if let Some(pin) = LED_PIN.borrow(cs).borrow_mut().as_mut() {
-            let _ = pin.toggle().unwrap();
+            pin.toggle().unwrap();
         }
     });
 }

@@ -21,7 +21,7 @@ pub static ALARM3: Mutex<RefCell<Option<Alarm3>>> = Mutex::new(RefCell::new(None
 const TIMER_INTERVAL_100MS: MicrosDurationU32 = MicrosDurationU32::micros(100_000);
 const TIMER_INTERVAL_5MS: MicrosDurationU32 = MicrosDurationU32::micros(5_000); // 5ms
 
-pub fn core1_task() -> () {
+pub fn core1_task() {
     info!("Core1 task started");
     // core0で初期化されたクロックとタイマーを使用するために、Peripheralsをstealして取得
     // let mut pac = unsafe { pac::Peripherals::steal() };
