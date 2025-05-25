@@ -1,4 +1,5 @@
-use crate::LED_PIN;
+// use crate::LED_PIN;
+use crate::globals::LED_PIN;
 use cortex_m::interrupt;
 use embedded_hal::digital::{OutputPin, StatefulOutputPin};
 

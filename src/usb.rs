@@ -1,4 +1,4 @@
-use crate::{SERIAL, USB_DEV};
+use crate::globals::{SERIAL, USB_DEV};
 use cortex_m::interrupt;
 
 pub fn poll_usb() {
