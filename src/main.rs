@@ -15,7 +15,6 @@ use bsp::entry;
 use core::cell::RefCell;
 use core::mem::MaybeUninit;
 use cortex_m::interrupt::Mutex;
-use cortex_m_rt::exception;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_alloc::LlffHeap as Heap;
