@@ -18,7 +18,7 @@ pub fn led_off() {
         }
     });
 }
-
+#[allow(dead_code)]
 pub fn led_toggle() {
     interrupt::free(|cs| {
         if let Some(pin) = LED_PIN.borrow(cs).borrow_mut().as_mut() {

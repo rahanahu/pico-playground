@@ -128,6 +128,9 @@ fn main() -> ! {
     .ok()
     .unwrap();
 
+    // core1起動前にFIFOを一応初期化状態にする
+    sio.fifo.drain();
+
     // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // usbポーリングのタイマー割り込みセットアップ
     let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
@@ -212,6 +215,14 @@ fn main() -> ! {
             .spawn(&mut CORE1_STACK.mem, core1::core1_task)
             .unwrap();
     }
+
+    if sio.fifo.is_write_ready() {
+        sio.fifo.write(123455);
+        info!("FIFO write: 123455");
+    }
+
+    let response = sio.fifo.read_blocking();
+    info!("FIFO read: {}", response);
 
     loop {
         cortex_m::asm::wfi(); // Wait for interrupt

@@ -7,7 +7,7 @@ pub fn poll_usb() {
             USB_DEV.borrow(cs).borrow_mut().as_mut(),
             SERIAL.borrow(cs).borrow_mut().as_mut(),
         ) {
-            let _ = usb_dev.poll(&mut [serial]);
+            usb_dev.poll(&mut [serial]);
         }
     });
 }

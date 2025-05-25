@@ -5,8 +5,10 @@ use cortex_m::asm;
 use cortex_m::interrupt::{self, Mutex};
 use defmt::info;
 use rp_pico::hal::fugit::MicrosDurationU32;
+
 use rp_pico::hal::{
     pac,
+    sio::Sio,
     timer::{Alarm, Alarm2, Alarm3},
 };
 
@@ -51,6 +53,14 @@ pub fn core1_task() {
     unsafe {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_3); // Core1用
     }
+
+    let raw_sio = unsafe { pac::SIO::steal() };
+    let sio = Sio::new(raw_sio);
+    let mut fifo = sio.fifo;
+    let value = fifo.read_blocking();
+    info!("Received value from Core0: {}", value);
+    fifo.write_blocking(value + 1); // Core0に値を返す
+    info!("Core1 task completed, entering WFI loop");
 
     loop {
         asm::wfi(); // 割り込み待ち
