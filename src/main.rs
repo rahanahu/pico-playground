@@ -4,6 +4,7 @@
 #![no_std]
 #![no_main]
 
+mod core1;
 mod led;
 mod usb;
 extern crate alloc;
@@ -12,14 +13,15 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use bsp::entry;
 use core::cell::RefCell;
+use core::mem::MaybeUninit;
 use cortex_m::interrupt::Mutex;
+use cortex_m_rt::exception;
 use defmt::*;
 use defmt_rtt as _;
 use embedded_alloc::LlffHeap as Heap;
 use fugit::MicrosDurationU32;
 use panic_probe as _;
 use rp_pico::hal::gpio::bank0::Gpio25;
-use rp_pico::hal::timer::Alarm;
 // usbシリアル通信サポート
 // USB Device support
 use usb_device::device::StringDescriptors;
@@ -39,18 +41,16 @@ use bsp::hal::{
     pac,
     pac::interrupt,
     sio::Sio,
-    timer::{Alarm0, Alarm1, Alarm2},
+    timer::{Alarm, Alarm0, Alarm1, Alarm2, Alarm3},
     watchdog::Watchdog,
     Timer,
 };
 
 const TIMER_INTERVAL_10MS: MicrosDurationU32 = MicrosDurationU32::micros(10_000); // 100ms
-const TIMER_INTERVAL_100MS: MicrosDurationU32 = MicrosDurationU32::micros(100_000); // 100ms
 
 // 競合回避のためにアラーム0,1をcore0に 2,3をcore1に割り当てる
 static ALARM0: Mutex<RefCell<Option<Alarm0>>> = Mutex::new(RefCell::new(None));
 static ALARM1: Mutex<RefCell<Option<Alarm1>>> = Mutex::new(RefCell::new(None));
-static ALARM2: Mutex<RefCell<Option<Alarm2>>> = Mutex::new(RefCell::new(None));
 
 // usb constants
 const USB_VID: u16 = 0x16C0;
@@ -60,6 +60,23 @@ const USB_MANUFACTURER_EN: &str = "My Company";
 const USB_PRODUCT_NAME_EN: &str = "RP2040 USB Serial test";
 const USB_POLLING_INTERVAL: MicrosDurationU32 = MicrosDurationU32::micros(2_000); // 2ms  5msにするとusbデバイスが切れる
 
+#[no_mangle]
+pub static mut SHARED_ALARM2: Alarm2 = unsafe { MaybeUninit::uninit().assume_init() };
+#[no_mangle]
+pub static mut SHARED_ALARM3: Alarm3 = unsafe { MaybeUninit::uninit().assume_init() };
+
+fn setup_alarm2(timer: &mut Timer) {
+    let alarm2 = timer.alarm_2().unwrap();
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SHARED_ALARM2), alarm2);
+    }
+}
+fn setup_alarm3(timer: &mut Timer) {
+    let alarm3 = timer.alarm_3().unwrap();
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!(SHARED_ALARM3), alarm3);
+    }
+}
 // グローバルでUSBデバイスとシリアルを共有
 static USB_DEV: Mutex<RefCell<Option<UsbDevice<'static, rp_pico::hal::usb::UsbBus>>>> =
     Mutex::new(RefCell::new(None));
@@ -69,18 +86,6 @@ static SERIAL: Mutex<RefCell<Option<SerialPort<'static, rp_pico::hal::usb::UsbBu
 // 割り込みで使うのでグローバルにピンを持つ
 static LED_PIN: Mutex<RefCell<Option<Pin<Gpio25, FunctionSio<SioOutput>, PullDown>>>> =
     Mutex::new(RefCell::new(None));
-
-fn core1_task() -> () {
-    loop {
-        cortex_m::asm::wfi();
-        // cortex_m::interrupt::free(|cs| {
-        //     if let Some(serial) = SERIAL.borrow(cs).borrow_mut().as_mut() {
-        //         let _ = serial.write(b"test\n");
-        //     }
-        // });
-    }
-}
-
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
 static mut CORE1_STACK: Stack<4096> = Stack::new();
@@ -127,6 +132,8 @@ fn main() -> ! {
     // let mut delay = cortex_m::delay::Delay::new(core.SYST, clocks.system_clock.freq().to_Hz());
     // usbポーリングのタイマー割り込みセットアップ
     let mut timer = Timer::new(pac.TIMER, &mut pac.RESETS, &clocks);
+    setup_alarm2(&mut timer);
+    setup_alarm3(&mut timer);
     // Alarmをグローバルに保存
     cortex_m::interrupt::free(|cs| {
         ALARM0.borrow(cs).replace(Some(timer.alarm_0().unwrap()));
@@ -134,9 +141,7 @@ fn main() -> ! {
     cortex_m::interrupt::free(|cs| {
         ALARM1.borrow(cs).replace(Some(timer.alarm_1().unwrap()));
     });
-    cortex_m::interrupt::free(|cs| {
-        ALARM2.borrow(cs).replace(Some(timer.alarm_2().unwrap()));
-    });
+
     // Alarm の割り込みを有効化し、最初の割り込みをセット（USB_POLLING_INTERVAL後）
     cortex_m::interrupt::free(|cs| {
         if let Some(alarm) = ALARM0.borrow(cs).borrow_mut().as_mut() {
@@ -150,16 +155,9 @@ fn main() -> ! {
             alarm.enable_interrupt();
         }
     });
-    cortex_m::interrupt::free(|cs| {
-        if let Some(alarm) = ALARM2.borrow(cs).borrow_mut().as_mut() {
-            alarm.schedule(TIMER_INTERVAL_100MS).unwrap();
-            alarm.enable_interrupt();
-        }
-    });
 
     unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_0) };
     unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_1) };
-    unsafe { pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_2) };
 
     let pins = bsp::Pins::new(
         pac.IO_BANK0,
@@ -212,7 +210,7 @@ fn main() -> ! {
     unsafe {
         #[allow(static_mut_refs)]
         multicore.cores()[1]
-            .spawn(&mut CORE1_STACK.mem, core1_task)
+            .spawn(&mut CORE1_STACK.mem, core1::core1_task)
             .unwrap();
     }
 
@@ -247,13 +245,11 @@ fn TIMER_IRQ_1() {
 }
 #[interrupt]
 fn TIMER_IRQ_2() {
-    cortex_m::interrupt::free(|cs| {
-        // Alarm0の割り込みフラグをクリアし、次の割り込みをスケジュール
-        if let Some(alarm) = ALARM2.borrow(cs).borrow_mut().as_mut() {
-            alarm.clear_interrupt();
-            alarm.schedule(TIMER_INTERVAL_100MS).ok();
-        }
-        led::led_toggle();
-    });
+    // core1のタイマー割り込み
+    core1::handle_timer_irq_2()
 }
-// End of file
+#[interrupt]
+fn TIMER_IRQ_3() {
+    // core1のタイマー割り込み
+    core1::handle_timer_irq_3()
+}
