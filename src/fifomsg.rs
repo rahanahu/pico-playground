@@ -8,6 +8,10 @@ pub enum FifoMessage {
     Unknown(u32),
 }
 
+pub enum FifoMsgIdentifier {
+    SerialCMD = 0x0,
+}
+
 pub enum SerialCommandType {
     PWM = 0x0,
     Analog,
@@ -31,11 +35,22 @@ impl From<SerialCommandType> for u8 {
     }
 }
 
+impl TryFrom<u8> for FifoMsgIdentifier {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x0 => Ok(FifoMsgIdentifier::SerialCMD),
+            _ => Err(()),
+        }
+    }
+}
+
 impl From<FifoMsgFrame> for FifoMessage {
     fn from(f: FifoMsgFrame) -> Self {
-        match f.identifier() {
-            0x0 => FifoMessage::SerialCMD(SerialCMD(f.data())),
-            _ => FifoMessage::Unknown(f.data()),
+        match FifoMsgIdentifier::try_from(f.identifier()) {
+            Ok(FifoMsgIdentifier::SerialCMD) => FifoMessage::SerialCMD(SerialCMD(f.payload())),
+            _ => FifoMessage::Unknown(f.payload()),
         }
     }
 }
@@ -45,7 +60,7 @@ bitfield! {
     pub struct FifoMsgFrame(u32);
     impl Debug;
     u8, identifier,set_identifier: 31,28;
-    u32, data, set_data: 27,0;
+    u32, payload, set_payload: 27,0;
 }
 
 bitfield! {
