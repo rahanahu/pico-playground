@@ -21,6 +21,12 @@ pub struct LockedSharedMessage {
 
 unsafe impl Sync for LockedSharedMessage {}
 
+impl Default for LockedSharedMessage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl LockedSharedMessage {
     pub const fn new() -> Self {
         Self {
@@ -52,6 +58,12 @@ impl LockedSharedMessage {
 pub struct SharedString {
     buffer: Deque<String<MAX_MESSAGE_SIZE>, MAX_BUFFER_SIZE>, // 一時バッファ
     queue: Deque<String<MAX_MESSAGE_SIZE>, MAX_QUEUE_SIZE>,   // core1に渡るログキュー
+}
+
+impl Default for SharedString {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SharedString {

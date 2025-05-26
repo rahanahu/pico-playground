@@ -24,6 +24,12 @@ pub struct UsbMessageReciver {
     in_message: bool,
 }
 
+impl Default for UsbMessageReciver {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UsbMessageReciver {
     pub fn new() -> Self {
         Self {
