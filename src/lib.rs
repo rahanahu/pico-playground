@@ -5,6 +5,7 @@
 #![no_main]
 pub mod core0;
 pub mod core1;
+pub mod fifomsg;
 pub mod globals;
 pub mod led;
 pub mod sharedmessage;

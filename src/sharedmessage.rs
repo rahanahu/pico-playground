@@ -9,8 +9,8 @@ use heapless::Vec;
 use rp_pico::hal::sio::Spinlock0;
 
 // 増やしすぎると正常に動作しなくなる たぶん.bssが溢れている
-const MAX_BUFFER_SIZE: usize = 8;
-const MAX_QUEUE_SIZE: usize = 8;
+const MAX_BUFFER_SIZE: usize = 5;
+const MAX_QUEUE_SIZE: usize = 5;
 
 pub static SHARED_MESSAGE_CORE0_TO_CORE1: Mutex<LockedSharedMessage> =
     Mutex::new(LockedSharedMessage::new());

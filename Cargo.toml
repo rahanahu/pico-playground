@@ -20,6 +20,7 @@ usb-device = "0.3.2"
 usbd-serial = "0.2.2"
 fugit = "0.3.7"
 heapless = "0.8.0"
+bitfield = "0.19.1"
 
 # but you can use any BSP. Uncomment this to use the pro_micro_rp2040 BSP instead
 # sparkfun-pro-micro-rp2040 = "0.8"
