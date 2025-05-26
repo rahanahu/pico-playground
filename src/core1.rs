@@ -1,6 +1,7 @@
 // src/core1.rs
 use crate::globals::{ALARM2, ALARM3};
 use crate::led;
+use crate::sharedmessage::SHARED_MESSAGE_CORE0_TO_CORE1;
 use cortex_m::asm;
 use cortex_m::interrupt;
 use defmt::info;
@@ -34,6 +35,7 @@ pub fn core1_task() {
         pac::NVIC::unmask(pac::Interrupt::TIMER_IRQ_3); // Core1用
     }
 
+    // core間通信のテスト
     let raw_sio = unsafe { pac::SIO::steal() };
     let sio = Sio::new(raw_sio);
     let mut fifo = sio.fifo;
@@ -64,4 +66,13 @@ pub fn handle_timer_irq_3() {
             alarm.schedule(TIMER_INTERVAL_5MS).ok();
         }
     });
+    interrupt::free(|cs| {
+        SHARED_MESSAGE_CORE0_TO_CORE1
+            .borrow(cs)
+            .drain_all()
+            .into_iter()
+            .for_each(|msg| {
+                info!("Core1 received message: {}", msg.as_str());
+            });
+    })
 }

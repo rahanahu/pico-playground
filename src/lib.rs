@@ -7,4 +7,5 @@ pub mod core0;
 pub mod core1;
 pub mod globals;
 pub mod led;
+pub mod sharedmessage;
 pub mod usb;

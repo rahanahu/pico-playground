@@ -1,5 +1,8 @@
 use crate::core1;
-use crate::globals::{ALARM0, ALARM1, ALARM2, ALARM3, CORE1_STACK, LED_PIN, SERIAL, USB_DEV};
+use crate::globals::{
+    ALARM0, ALARM1, ALARM2, ALARM3, CORE1_STACK, LED_PIN, SERIAL, USB_DEV, USB_RECIEVER,
+};
+use crate::sharedmessage::SHARED_MESSAGE_CORE0_TO_CORE1;
 use crate::usb;
 use defmt::info;
 use rp_pico::hal::fugit::MicrosDurationU32;
@@ -146,6 +149,11 @@ pub fn main() -> ! {
         LED_PIN.borrow(cs).replace(Some(led_pin));
     });
 
+    let usb_reciever = usb::UsbMessageReciver::new();
+    cortex_m::interrupt::free(|cs| {
+        USB_RECIEVER.borrow(cs).replace(Some(usb_reciever));
+    });
+
     // core1の起動
     let mut multicore = Multicore::new(&mut pac.PSM, &mut pac.PPB, &mut sio.fifo);
     unsafe {
@@ -186,6 +194,17 @@ pub fn handle_timer_irq_1() {
         if let Some(alarm) = ALARM1.borrow(cs).borrow_mut().as_mut() {
             alarm.clear_interrupt();
             alarm.schedule(TIMER_INTERVAL_10MS).ok();
+        }
+    });
+    cortex_m::interrupt::free(|cs| {
+        // ロックが取得できずバッファに残っている物をqueueに送信
+        SHARED_MESSAGE_CORE0_TO_CORE1.borrow(cs).flush();
+    });
+    cortex_m::interrupt::free(|cs| {
+        if let Some(serial) = SERIAL.borrow(cs).borrow_mut().as_mut() {
+            if let Some(usb_reciever) = USB_RECIEVER.borrow(cs).borrow_mut().as_mut() {
+                usb_reciever.poll(serial);
+            }
         }
     });
 }
