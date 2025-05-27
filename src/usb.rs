@@ -1,4 +1,5 @@
 extern crate alloc;
+use crate::fifomsg::{decode_fifo_msg, encode_cmd, FifoMessageKind};
 use crate::globals::MAX_MESSAGE_SIZE;
 use crate::globals::{SERIAL, USB_DEV};
 use crate::sharedmessage::SHARED_MESSAGE_CORE0_TO_CORE1;
@@ -74,7 +75,35 @@ impl UsbMessageReciver {
 
     fn handle_message(&self, msg: heapless::String<MAX_MESSAGE_SIZE>) {
         // パースや処理はここに追加
-        info!("Handling message: {}", msg.as_str());
+        if let Some(frames) = encode_cmd(msg.clone().as_str()) {
+            for frame in &frames {
+                let message = decode_fifo_msg(*frame);
+                match message {
+                    FifoMessageKind::SerialCMD(cmd) => {
+                        info!(
+                            "Received SerialCMD: cmd:{} ch:{} val:{} ",
+                            cmd.cmd(),
+                            cmd.channel(),
+                            cmd.value()
+                        );
+                    }
+                    FifoMessageKind::PWMCMD(cmd) => {
+                        info!("Received PWMCMD: ch:{} val:{} ", cmd.channel(), cmd.value());
+                    }
+                    FifoMessageKind::VersionCMD(version) => {
+                        info!(
+                            "Received VersionCMD: version: V{}.{}.{}",
+                            version.major(),
+                            version.minor(),
+                            version.patch()
+                        );
+                    }
+                    _ => (),
+                }
+            }
+        } else {
+            warn!("Failed to encode command: {}", msg.as_str());
+        }
         interrupt::free(|cs| {
             SHARED_MESSAGE_CORE0_TO_CORE1.borrow(cs).write(msg);
         });
