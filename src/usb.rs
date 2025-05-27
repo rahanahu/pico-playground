@@ -79,6 +79,14 @@ impl UsbMessageReciver {
             for frame in &frames {
                 let message = decode_fifo_msg(*frame);
                 match message {
+                    FifoMessageKind::VersionCMD(version) => {
+                        info!(
+                            "Received VersionCMD: version: V{}.{}.{}",
+                            version.major(),
+                            version.minor(),
+                            version.patch()
+                        );
+                    }
                     FifoMessageKind::SerialCMD(cmd) => {
                         info!(
                             "Received SerialCMD: cmd:{} ch:{} val:{} ",
@@ -90,13 +98,9 @@ impl UsbMessageReciver {
                     FifoMessageKind::PWMCMD(cmd) => {
                         info!("Received PWMCMD: ch:{} val:{} ", cmd.channel(), cmd.value());
                     }
-                    FifoMessageKind::VersionCMD(version) => {
-                        info!(
-                            "Received VersionCMD: version: V{}.{}.{}",
-                            version.major(),
-                            version.minor(),
-                            version.patch()
-                        );
+
+                    FifoMessageKind::LedCMD(_) => {
+                        info!("LEDCMD recieved")
                     }
                     _ => (),
                 }

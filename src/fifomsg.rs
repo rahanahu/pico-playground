@@ -7,83 +7,6 @@ extern crate alloc;
 use alloc::vec::Vec;
 use defmt::info;
 
-pub enum FifoMessageKind {
-    SerialCMD(SerialCMD),
-    PWMCMD(PWMCMD),
-    VersionCMD(VersionCMD),
-    Unknown(u32),
-}
-
-pub enum FifoMsgIdentifier {
-    SerialCMD = 0x0,
-    VersionCMD,
-    PWMCMD,
-}
-
-enum SerialCommandType {
-    PWM = 0x1,
-    CFG,
-    VERSION,
-}
-
-impl TryFrom<u8> for SerialCommandType {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            x if x == SerialCommandType::PWM as u8 => Ok(SerialCommandType::PWM),
-            x if x == SerialCommandType::CFG as u8 => Ok(SerialCommandType::CFG),
-            x if x == SerialCommandType::VERSION as u8 => Ok(SerialCommandType::VERSION),
-            _ => Err(()),
-        }
-    }
-}
-// シリアルメッセージの冒頭識別子の判定用
-impl TryFrom<&str> for SerialCommandType {
-    type Error = ();
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            s if s.starts_with("PWM") => Ok(SerialCommandType::PWM),
-            s if s.starts_with("CFG") => Ok(SerialCommandType::CFG),
-            s if s.starts_with("VER") => Ok(SerialCommandType::VERSION),
-            _ => Err(()),
-        }
-    }
-}
-
-impl From<SerialCommandType> for u8 {
-    fn from(cmd: SerialCommandType) -> Self {
-        cmd as u8
-    }
-}
-
-impl TryFrom<u8> for FifoMsgIdentifier {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            x if x == FifoMsgIdentifier::SerialCMD as u8 => Ok(FifoMsgIdentifier::SerialCMD),
-            x if x == FifoMsgIdentifier::VersionCMD as u8 => Ok(FifoMsgIdentifier::VersionCMD),
-            x if x == FifoMsgIdentifier::PWMCMD as u8 => Ok(FifoMsgIdentifier::PWMCMD),
-            _ => Err(()),
-        }
-    }
-}
-
-impl From<FifoMsgFrame> for FifoMessageKind {
-    fn from(f: FifoMsgFrame) -> Self {
-        match FifoMsgIdentifier::try_from(f.identifier()) {
-            Ok(FifoMsgIdentifier::SerialCMD) => FifoMessageKind::SerialCMD(SerialCMD(f.payload())),
-            Ok(FifoMsgIdentifier::PWMCMD) => FifoMessageKind::PWMCMD(PWMCMD(f.payload())),
-            Ok(FifoMsgIdentifier::VersionCMD) => {
-                FifoMessageKind::VersionCMD(VersionCMD(f.payload()))
-            }
-            Err(_) => FifoMessageKind::Unknown(f.payload()),
-        }
-    }
-}
-
 bitfield! {
     #[derive(Clone, Copy, Eq, PartialEq)]
     pub struct FifoMsgFrame(u32);
@@ -117,23 +40,166 @@ bitfield! {
     pub u8, patch, set_patch: 11, 4;
 }
 
+bitfield! {
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    pub struct LedCMD(u32);
+    impl Debug;
+    pub u32, cmd, set_cmd: 27, 0;
+}
+
+#[repr(u8)]
+pub enum FifoMsgIdentifier {
+    SerialCMD = 0x0,
+    VersionCMD,
+    PWMCMD,
+    LedCMD,
+}
+
+pub enum FifoMessageKind {
+    SerialCMD(SerialCMD),
+    PWMCMD(PWMCMD),
+    VersionCMD(VersionCMD),
+    LedCMD(LedCMD),
+    Unknown(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SerialCommandType {
+    Pwm,
+    Cfg,
+    Version,
+    Led,
+}
+
+impl SerialCommandType {
+    const VARIANTS: &'static [(&'static str, SerialCommandType)] = &[
+        ("PWM", SerialCommandType::Pwm),
+        ("CFG", SerialCommandType::Cfg),
+        ("VER", SerialCommandType::Version),
+        ("LED", SerialCommandType::Led),
+    ];
+}
+
+// FIFOメッセージ定義トレイト
+pub trait FifoMessageDef: Sized {
+    const IDENT: FifoMsgIdentifier;
+    fn encode(&self) -> FifoMsgFrame {
+        let mut frame = FifoMsgFrame(0);
+        frame.set_identifier(Self::IDENT as u8);
+        frame.set_payload(self.as_u32());
+        frame
+    }
+    fn decode(payload: u32) -> Self;
+    fn as_u32(&self) -> u32;
+}
+
+macro_rules! impl_fifo_msg {
+    ($name:ident, $ident:expr) => {
+        impl FifoMessageDef for $name {
+            const IDENT: FifoMsgIdentifier = $ident;
+            fn decode(payload: u32) -> Self {
+                Self(payload)
+            }
+            fn as_u32(&self) -> u32 {
+                self.0
+            }
+        }
+    };
+}
+
+impl TryFrom<u8> for SerialCommandType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Self::VARIANTS
+            .iter()
+            .enumerate()
+            .find_map(|(idx, &(_, variant))| {
+                if idx as u8 == value {
+                    Some(variant)
+                } else {
+                    None
+                }
+            })
+            .ok_or(())
+    }
+}
+
+impl From<SerialCommandType> for u8 {
+    fn from(cmd: SerialCommandType) -> Self {
+        SerialCommandType::VARIANTS
+            .iter()
+            .position(|&(_, v)| v == cmd)
+            .unwrap_or(0) as u8
+    }
+}
+
+impl TryFrom<&str> for SerialCommandType {
+    type Error = ();
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::VARIANTS
+            .iter()
+            .find_map(|&(prefix, variant)| {
+                if value.starts_with(prefix) {
+                    Some(variant)
+                } else {
+                    None
+                }
+            })
+            .ok_or(())
+    }
+}
+
+impl TryFrom<u8> for FifoMsgIdentifier {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            x if x == FifoMsgIdentifier::SerialCMD as u8 => Ok(FifoMsgIdentifier::SerialCMD),
+            x if x == FifoMsgIdentifier::VersionCMD as u8 => Ok(FifoMsgIdentifier::VersionCMD),
+            x if x == FifoMsgIdentifier::PWMCMD as u8 => Ok(FifoMsgIdentifier::PWMCMD),
+            x if x == FifoMsgIdentifier::LedCMD as u8 => Ok(FifoMsgIdentifier::LedCMD),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<FifoMsgFrame> for FifoMessageKind {
+    fn from(f: FifoMsgFrame) -> Self {
+        match FifoMsgIdentifier::try_from(f.identifier()) {
+            Ok(id) => decode_by_id(id, f.payload()),
+            Err(_) => FifoMessageKind::Unknown(f.payload()),
+        }
+    }
+}
+
+fn decode_by_id(id: FifoMsgIdentifier, payload: u32) -> FifoMessageKind {
+    match id {
+        FifoMsgIdentifier::SerialCMD => FifoMessageKind::SerialCMD(SerialCMD::decode(payload)),
+        FifoMsgIdentifier::PWMCMD => FifoMessageKind::PWMCMD(PWMCMD::decode(payload)),
+        FifoMsgIdentifier::VersionCMD => FifoMessageKind::VersionCMD(VersionCMD::decode(payload)),
+        FifoMsgIdentifier::LedCMD => FifoMessageKind::LedCMD(LedCMD::decode(payload)),
+    }
+}
+
 pub fn encode_cmd(s: &str) -> Option<Vec<FifoMsgFrame>> {
     let cmd_type = SerialCommandType::try_from(s).ok()?;
     info!("Received command: {}", s);
     match cmd_type {
-        SerialCommandType::PWM => {
-            info!("Received PWM command!!: {}", s);
+        SerialCommandType::Pwm => {
+            // info!("Received PWM command!!: {}", s);
             let cmd_body = s.strip_prefix("PWM")?;
             let cmds = cmd_body.split(',').collect::<Vec<&str>>();
-            if cmds.len() < 1 {
-                info!("Invalid PWM command format: {}", s);
-                return None; // Invalid command format
+            if cmds.is_empty() {
+                // info!("Invalid PWM command format: {}", s);
+                None // Invalid command format
             } else {
                 let mut frames = Vec::new();
                 for cmd in cmds {
                     let parts: Vec<&str> = cmd.split(':').collect();
                     if parts.len() != 2 {
-                        info!("Invalid PWM command part format2: {}", cmd);
+                        // info!("Invalid PWM command part format2: {}", cmd);
                         return None; // Invalid command format
                     }
                     let channel: u8 = parts[0].parse().ok()?;
@@ -150,8 +216,8 @@ pub fn encode_cmd(s: &str) -> Option<Vec<FifoMsgFrame>> {
                 Some(frames)
             }
         }
-        SerialCommandType::VERSION => {
-            info!("Received VERSION command!!: {}", s);
+        SerialCommandType::Version => {
+            // info!("Received VERSION command!!: {}", s);
             let mut versions = Vec::new();
             let mut version_cmd = VersionCMD(0);
 
@@ -170,12 +236,29 @@ pub fn encode_cmd(s: &str) -> Option<Vec<FifoMsgFrame>> {
             frame.set_identifier(FifoMsgIdentifier::VersionCMD as u8);
             frame.set_payload(version_cmd.0);
             versions.push(frame);
+            // versionは1つしかないのでVecでなくても良いが、空気を読んでvecにしておく
             Some(versions)
         }
-        SerialCommandType::CFG => {
+        SerialCommandType::Cfg => {
             info!("Received CFG command!!");
             // Handle other command types if needed
             None
+        }
+        SerialCommandType::Led => {
+            let cmd_body = s.strip_prefix("LED:")?;
+            let mut leds = Vec::new();
+            let mut led = LedCMD(0);
+            match cmd_body {
+                "ON" => led.set_cmd(1),
+                "OFF" => led.set_cmd(0),
+                "TOGGLE" => led.set_cmd(2),
+                _ => {}
+            }
+            let mut frame = FifoMsgFrame(0);
+            frame.set_identifier(FifoMsgIdentifier::LedCMD as u8);
+            frame.set_payload(led.0);
+            leds.push(frame);
+            Some(leds)
         }
     }
 }
@@ -183,3 +266,8 @@ pub fn encode_cmd(s: &str) -> Option<Vec<FifoMsgFrame>> {
 pub fn decode_fifo_msg(frame: FifoMsgFrame) -> FifoMessageKind {
     frame.into()
 }
+
+impl_fifo_msg!(SerialCMD, FifoMsgIdentifier::SerialCMD);
+impl_fifo_msg!(PWMCMD, FifoMsgIdentifier::PWMCMD);
+impl_fifo_msg!(VersionCMD, FifoMsgIdentifier::VersionCMD);
+impl_fifo_msg!(LedCMD, FifoMsgIdentifier::LedCMD);
